@@ -1,0 +1,217 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Energy Asset Exposure Map - S3 raw/processed buckets, ingestion + join
+  Lambdas, EventBridge schedule. Modeled on the Global Shock pipeline's
+  hardened CloudFormation pattern.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: energy-asset-exposure-map
+  Environment:
+    Type: String
+    AllowedValues: [dev, prod]
+    Default: dev
+  AllowedCorsOrigin:
+    Type: String
+    Default: "https://dataandgrit.energy"
+
+Resources:
+  RawBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-raw-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireRawSnapshots
+            Status: Enabled
+            ExpirationInDays: 90
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Function: !GetAtt JoinFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: "raw/"
+                  - Name: suffix
+                    Value: "snapshot.json"
+    DependsOn:
+      - JoinS3Permission
+
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${ProjectName}-${Environment}-processed-${AWS::AccountId}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: [!Ref AllowedCorsOrigin]
+            AllowedMethods: [GET]
+            AllowedHeaders: ["*"]
+            MaxAge: 3600
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-${Environment}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: s3-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  # Deterministic ARNs rather than !GetAtt RawBucket.Arn - GetAtt would make
+                  # this role depend on RawBucket, but RawBucket's S3 notification depends on
+                  # JoinFunction, which depends on this role, which would close the loop.
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Environment}-raw-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Environment}-raw-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Environment}-processed-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-${Environment}-processed-${AWS::AccountId}/*"
+
+  IngestAssetsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-ingest-assets"
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          S3_BUCKET_RAW: !Sub "${ProjectName}-${Environment}-raw-${AWS::AccountId}"
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "placeholder - deploy.sh pushes the real code"}
+
+  IngestHazardsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-ingest-hazards"
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      # Lambda allocates CPU proportional to memory. 512MB was starving
+      # json.dumps()/upload of the ~26k-feature flood zone payload - fetching
+      # completed in ~90s (logged), then it hung silently for the rest of the
+      # 300s timeout with no further log lines. Bumped rather than guessed at
+      # more timeout, since the fetch phase was already confirmed fast.
+      MemorySize: 2048
+      Environment:
+        Variables:
+          S3_BUCKET_RAW: !Sub "${ProjectName}-${Environment}-raw-${AWS::AccountId}"
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "placeholder - deploy.sh pushes the real code"}
+
+  JoinFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-${Environment}-join"
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 1024
+      Environment:
+        Variables:
+          S3_BUCKET_RAW: !Sub "${ProjectName}-${Environment}-raw-${AWS::AccountId}"
+          S3_BUCKET_PROCESSED: !Sub "${ProjectName}-${Environment}-processed-${AWS::AccountId}"
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "placeholder - deploy.sh pushes the real code"}
+
+  # Separate from the bucket's NotificationConfiguration to avoid the S3<->Lambda
+  # circular dependency: the bucket needs the function's ARN, the permission
+  # needs the bucket's ARN, so the permission is its own resource.
+  JoinS3Permission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JoinFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::${ProjectName}-${Environment}-raw-${AWS::AccountId}"
+      SourceAccount: !Ref AWS::AccountId
+
+  IngestScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-monthly-ingest"
+      Description: "Monthly trigger for asset/hazard ingestion - these sources move slowly"
+      ScheduleExpression: "cron(0 6 1 * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: ingest-assets
+          Arn: !GetAtt IngestAssetsFunction.Arn
+        - Id: ingest-hazards
+          Arn: !GetAtt IngestHazardsFunction.Arn
+
+  IngestAssetsSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestAssetsFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IngestScheduleRule.Arn
+
+  IngestHazardsSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestHazardsFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt IngestScheduleRule.Arn
+
+Outputs:
+  RawBucketName:
+    Value: !Ref RawBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-raw-bucket"
+  ProcessedBucketName:
+    Value: !Ref ProcessedBucket
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-processed-bucket"
+  ProcessedLatestUrl:
+    Description: "The stable URL the frontend map fetches"
+    Value: !Sub "https://${ProcessedBucket}.s3.${AWS::Region}.amazonaws.com/processed/latest.json"

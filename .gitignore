@@ -1,2 +1,27 @@
 # hide claude notes
+claude.md
+CLAUDE.md
 
+# local dev
+local_dev_output/
+__pycache__/
+*.pyc
+.env
+.env.*
+
+# AWS credentials / secrets - should never live in this repo, but block
+# them defensively in case anyone points a local .aws dir or key here
+.aws/
+*.pem
+*credentials*
+*.tfstate
+*.tfstate.backup
+
+# deploy.sh build artifacts, if ever run with output landing in-repo
+*.zip
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
