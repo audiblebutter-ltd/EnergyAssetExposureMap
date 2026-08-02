@@ -24,12 +24,18 @@ S3_BUCKET_RAW = os.environ["S3_BUCKET_RAW"]
 S3_BUCKET_PROCESSED = os.environ["S3_BUCKET_PROCESSED"]
 
 ASSET_SOURCES = ["crown_estate_ewni", "crown_estate_scotland", "nsta", "osm_overpass", "repd_onshore", "nuclear"]
-HAZARD_SOURCES = ["flood_zones", "earthquakes", "storms"]
+HAZARD_SOURCES = ["flood_zones", "earthquakes", "storms", "wildfires"]
 
 # Distance thresholds (km) for a "close" exposure flag, per hazard type.
 FLOOD_ZONE_THRESHOLD_KM = 2.0
 EARTHQUAKE_THRESHOLD_KM = 25.0
 STORM_SEVERE_CATEGORIES = {"severe", "extreme"}
+# Wildfire perimeters are individual real burnt-area events (like
+# earthquakes), not a national-scale summary (like storms) - a tighter
+# radius than earthquakes since fire spread is far more localised than
+# seismic effects, but wider than flood zones since a fire's smoke/ember
+# risk to a nearby asset isn't bounded by the burnt polygon's own edge.
+WILDFIRE_THRESHOLD_KM = 5.0
 
 
 def _load_latest_or_fallback(bucket, prefix, source_name, existing_by_source, key_in_snapshot):
@@ -91,10 +97,11 @@ def _hazard_centroids(features):
     return out
 
 
-def build_exposure(assets, flood_features, earthquake_features, storm_catalogue):
+def build_exposure(assets, flood_features, earthquake_features, storm_catalogue, wildfire_features):
     """Pure join logic - takes plain Python data, returns a GeoJSON FeatureCollection dict."""
     flood_hazards = _hazard_centroids(flood_features)
     quake_hazards = _hazard_centroids(earthquake_features)
+    wildfire_hazards = _hazard_centroids(wildfire_features)
 
     severe_storms = [s for s in storm_catalogue.get("storms", []) if s.get("category") in STORM_SEVERE_CATEGORIES]
     storm_summary = {
@@ -109,6 +116,8 @@ def build_exposure(assets, flood_features, earthquake_features, storm_catalogue)
 
         flood_dist, _ = geo.nearest_feature(lat, lon, flood_hazards)
         quake_dist, quake_match = geo.nearest_feature(lat, lon, quake_hazards)
+        wildfire_dist, wildfire_match = geo.nearest_feature(lat, lon, wildfire_hazards)
+        wildfire_props = (wildfire_match or {}).get("properties", {}) if wildfire_match else {}
 
         hazards = {
             "flood": {
@@ -121,6 +130,12 @@ def build_exposure(assets, flood_features, earthquake_features, storm_catalogue)
                 "exposed": quake_dist is not None and quake_dist <= EARTHQUAKE_THRESHOLD_KM,
             },
             "storm": storm_summary,
+            "wildfire": {
+                "nearest_perimeter_km": round(wildfire_dist, 2) if wildfire_dist is not None else None,
+                "nearest_area_ha": wildfire_props.get("AREA_HA"),
+                "nearest_fire_date": wildfire_props.get("FIREDATE"),
+                "exposed": wildfire_dist is not None and wildfire_dist <= WILDFIRE_THRESHOLD_KM,
+            },
         }
 
         out_features.append(
@@ -155,11 +170,12 @@ def lambda_handler(event, context):
 
     flood_features = _load_latest_or_fallback(S3_BUCKET_RAW, "raw/flood_zones/", "flood_zones", {}, "features")
     earthquake_features = _load_latest_or_fallback(S3_BUCKET_RAW, "raw/earthquakes/", "earthquakes", {}, "features")
+    wildfire_features = _load_latest_or_fallback(S3_BUCKET_RAW, "raw/wildfires/", "wildfires", {}, "features")
 
     storm_key = s3_helpers.latest_snapshot_key(S3_BUCKET_RAW, "raw/storms/")
     storm_snapshot = (s3_helpers.read_json(S3_BUCKET_RAW, storm_key) if storm_key else None) or {"storms": []}
 
-    exposure = build_exposure(assets, flood_features, earthquake_features, storm_snapshot)
+    exposure = build_exposure(assets, flood_features, earthquake_features, storm_snapshot, wildfire_features)
     exposure["schema_version"] = "1.0"
     exposure["processed_at"] = now.isoformat()
     exposure["summary"] = {

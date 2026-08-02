@@ -70,6 +70,13 @@ Every endpoint below was live-tested during research (2026-07-19). All are free,
 - **License**: BGS Open Government Licence
 - **Notes**: Both collections confirmed live. Use `ml` (magnitude) to threshold out the large number of very minor events — UK seismicity is mostly sub-magnitude-2 and not underwriting-relevant.
 
+### EFFIS — wildfire burnt-area perimeters
+- **Endpoint**: `https://maps.effis.emergency.copernicus.eu/effis` (WFS, MapServer-backed). One feature type per year: `ms:modis.ba.poly.<year>`, confirmed live for 2016-2025 via `GetCapabilities`.
+- **Query**: `?service=WFS&version=2.0.0&request=GetFeature&typeNames=ms:modis.ba.poly.<year>&outputFormat=GEOJSON&bbox=<minLat>,<minLon>,<maxLat>,<maxLon>,urn:ogc:def:crs:EPSG::4326` (same EPSG:4326-registry lat/lon axis order gotcha as the EA flood WFS above)
+- **Format**: GeoJSON `FeatureCollection`, `MultiPolygon` geometries (burnt-area perimeters, real coordinates in standard GeoJSON lon/lat order despite the bbox query's lat/lon convention). Fields: `FIREDATE`, `FINALDATE`, `COUNTRY`, `PROVINCE`, `COMMUNE`, `AREA_HA`, plus land-cover breakdown fields.
+- **License**: Copernicus Emergency Management Service — free and open, attribution requested.
+- **Notes**: `outputFormat` must be exactly `GEOJSON` (all-caps) — `application/json`, `json`, `geojson` and `GeoJSON` all either 502 or silently fail against this particular MapServer instance; only the literal string `GEOJSON` works. The GB bbox also catches Ireland's west coast, so `COUNTRY == "UK"` must be filtered explicitly — a raw bbox query returns both (tested: 460 UK + 39 IE features for 2022 alone). Confirmed no pagination truncation for any single year's UK-filtered result (`numberMatched` matched `features` returned in every year tested) — UK counts per year range from 9 (2016) to 1,224 (2025, a severe wildfire year); all 10 years took ~11s total to fetch from a home network. Detection threshold is MODIS/VIIRS-based (satellite thermal-anomaly + burnt-area classification), so very small fires may not register — this is a real coverage floor, not a bug, same caveat as the flood-zone/OSM sources.
+
 ### Storm events — hand-curated (not a live API)
 - **Source**: manually compiled from the Met Office's public "named storms" season pages (`metoffice.gov.uk/weather/warnings-and-advice/uk-storm-centre`) — no clean single machine-readable feed exists; IBTrACS was investigated and rejected (tropical-cyclone-only, doesn't cover UK/North Sea extratropical storms).
 - **Format**: static `data/storm_events.json` — `{name, season, date, max_gust_mph?, category}[]`, committed to the repo and uploaded once as a static file, not re-fetched on a schedule.

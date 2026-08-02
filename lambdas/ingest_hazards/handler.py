@@ -1,10 +1,11 @@
 """
 ingest_hazards Lambda.
 Triggered by EventBridge on a schedule (monthly - these sources move slowly).
-Pulls flood zone and earthquake hazard data from public sources, writes one
-dated raw snapshot per source to S3, and copies the hand-curated storm
-catalogue (data/storm_events.json, bundled into the deployment zip) into the
-same raw prefix so the join Lambda can read all three hazards the same way.
+Pulls flood zone, earthquake and wildfire hazard data from public sources,
+writes one dated raw snapshot per source to S3, and copies the hand-curated
+storm catalogue (data/storm_events.json, bundled into the deployment zip)
+into the same raw prefix so the join Lambda can read all four hazards the
+same way.
 """
 
 import json
@@ -29,6 +30,13 @@ EA_FLOOD_ZONES_TYPE_NAME = "dataset-04532375-a198-476e-985e-0579a0a11b47:Flood_Z
 
 BGS_COLLECTIONS = ["recentearthquakes", "historicalearthquakes"]
 BGS_MIN_MAGNITUDE = 2.0  # UK seismicity below ML 2 is not underwriting-relevant
+
+# EFFIS (Copernicus Emergency Management Service) burnt-area perimeters.
+# Confirmed via GetCapabilities: one feature type per year, 2016-2025 at
+# the time this was written - bump EFFIS_YEARS when a new year's layer
+# appears (ms:modis.ba.poly.<year>).
+EFFIS_WFS_URL = "https://maps.effis.emergency.copernicus.eu/effis"
+EFFIS_YEARS = list(range(2016, 2026))
 
 # south, west, north, east - Great Britain mainland + North Sea / UKCS waters
 GB_BBOX = (49.8, -8.7, 61.0, 2.0)
@@ -182,6 +190,61 @@ def fetch_earthquakes():
     return features
 
 
+def _effis_year_features(year):
+    features = []
+    min_lon, min_lat, max_lon, max_lat = GB_BBOX_LONLAT
+    start_index = 0
+    page_size = 1000
+    deadline = time.monotonic() + PAGINATION_TIME_BUDGET_SECONDS
+
+    for _ in range(MAX_PAGES):
+        params = {
+            "service": "WFS",
+            "version": "2.0.0",
+            "request": "GetFeature",
+            "typeNames": f"ms:modis.ba.poly.{year}",
+            "outputFormat": "GEOJSON",
+            "count": page_size,
+            "startIndex": start_index,
+            "bbox": f"{min_lat},{min_lon},{max_lat},{max_lon},urn:ogc:def:crs:EPSG::4326",
+        }
+        url = f"{EFFIS_WFS_URL}?{urllib.parse.urlencode(params)}"
+        try:
+            page = _http_get_json(url, timeout=30)
+        except RequestHardTimeout:
+            logger.error(f"wildfires {year} request hard-timed-out at startIndex={start_index}")
+            break
+
+        page_features = page.get("features", [])
+        # The GB bbox also catches Ireland's west coast - EFFIS's own
+        # COUNTRY field is the actual UK/not-UK boundary, the bbox is just
+        # a coarse pre-filter.
+        features.extend(f for f in page_features if f.get("properties", {}).get("COUNTRY") == "UK")
+
+        if len(page_features) < page_size:
+            break
+        if time.monotonic() >= deadline:
+            logger.error(f"wildfires {year} pagination hit its time budget - returning partial data")
+            break
+        start_index += page_size
+
+    return features
+
+
+def fetch_wildfires():
+    """
+    UK wildfire perimeters (burnt-area polygons) from EFFIS, the Copernicus
+    Emergency Management Service's wildfire monitoring system - real
+    per-event geometry from MODIS/VIIRS satellite thermal-anomaly
+    detection, not a national-scale summary like the storm catalogue.
+    One feature type per year (2016-2025); each is queried and combined.
+    """
+    features = []
+    for year in EFFIS_YEARS:
+        features.extend(_effis_year_features(year))
+    return features
+
+
 def load_storm_catalogue():
     """Read the hand-curated storm catalogue bundled alongside this handler."""
     path = Path(__file__).parent / "data" / "storm_events.json"
@@ -221,6 +284,25 @@ def lambda_handler(event, context):
     except Exception as e:
         logger.error(f"earthquakes failed: {e}", exc_info=True)
         results.append({"source": "earthquakes", "error": str(e)})
+
+    try:
+        wildfire_features = fetch_wildfires()
+        key = f"raw/wildfires/{date_prefix}/snapshot.json"
+        s3_helpers.write_json(
+            S3_BUCKET_RAW,
+            key,
+            {
+                "source": "wildfires",
+                "fetched_at": now.isoformat(),
+                "count": len(wildfire_features),
+                "features": wildfire_features,
+            },
+        )
+        logger.info(f"Wrote {len(wildfire_features)} wildfire features to {key}")
+        results.append({"source": "wildfires", "count": len(wildfire_features)})
+    except Exception as e:
+        logger.error(f"wildfires failed: {e}", exc_info=True)
+        results.append({"source": "wildfires", "error": str(e)})
 
     try:
         storms = load_storm_catalogue()

@@ -8,8 +8,12 @@ each source integration and the join logic get confirmed to actually work
 before any AWS deployment.
 
 Usage: python scripts/run_local.py [--skip-slow]
-  --skip-slow  skip the OSM Overpass and full-GB flood/earthquake pulls,
-               which can take a while against the public rate-limited APIs
+  --skip-slow  skip the OSM Overpass and full-GB flood/earthquake/wildfire
+               pulls, which can take a while against the public rate-limited
+               APIs (and on Windows, skip them entirely - the hard-timeout
+               SIGALRM these use is POSIX-only and errors on native Windows
+               Python; the Lambda runtime itself is Linux, so this is a
+               local-dev-only limitation)
 """
 
 import json
@@ -84,19 +88,24 @@ def main():
     print(f"  earthquakes: {len(quake_features)} features" + (" (skipped)" if skip_slow else ""))
     _write("hazards_earthquakes", quake_features)
 
+    wildfire_features = [] if skip_slow else ingest_hazards.fetch_wildfires()
+    print(f"  wildfires: {len(wildfire_features)} features" + (" (skipped)" if skip_slow else ""))
+    _write("hazards_wildfires", wildfire_features)
+
     with open(ROOT / "data" / "storm_events.json", encoding="utf-8") as f:
         storm_catalogue = json.load(f)
     print(f"  storms: {len(storm_catalogue['storms'])} events (static catalogue)")
     _write("hazards_storms", storm_catalogue)
 
     print("Running join...")
-    exposure = join.build_exposure(all_assets, flood_features, quake_features, storm_catalogue)
+    exposure = join.build_exposure(all_assets, flood_features, quake_features, storm_catalogue, wildfire_features)
     exposure["summary"] = {
         "asset_count": len(exposure["features"]),
         "exposed_to_flood": sum(1 for f in exposure["features"] if f["properties"]["hazards"]["flood"]["exposed"]),
         "exposed_to_earthquake": sum(
             1 for f in exposure["features"] if f["properties"]["hazards"]["earthquake"]["exposed"]
         ),
+        "exposed_to_wildfire": sum(1 for f in exposure["features"] if f["properties"]["hazards"]["wildfire"]["exposed"]),
     }
     print(f"  {exposure['summary']}")
     _write("exposure", exposure)
