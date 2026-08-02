@@ -63,15 +63,30 @@ Resources:
               SSEAlgorithm: AES256
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
-        BlockPublicPolicy: true
+        BlockPublicPolicy: false
         IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+        RestrictPublicBuckets: false
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins: [!Ref AllowedCorsOrigin]
             AllowedMethods: [GET]
             AllowedHeaders: ["*"]
             MaxAge: 3600
+
+  # Public read on processed/* only - this is the data the frontend map fetches
+  # directly from S3 (no API Gateway layer). Raw bucket stays fully private.
+  ProcessedBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ProcessedBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PublicReadProcessed
+            Effect: Allow
+            Principal: "*"
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${ProjectName}-${Environment}-processed-${AWS::AccountId}/processed/*"
 
   LambdaExecutionRole:
     Type: AWS::IAM::Role

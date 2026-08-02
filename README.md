@@ -21,7 +21,7 @@ The pipeline follows the same shape as the [Global Shock oil price pipeline](htt
 - EventBridge triggers both ingestion Lambdas monthly (these sources don't move daily like oil prices)
 
 **Frontend**
-- Not yet built - `processed/latest.json` is designed to be fetched directly from S3 (no API Gateway layer), same pattern as the oil price pipeline. The processed bucket currently blocks all public access (deliberately, from the hardened CFN template) - making it public-read for the frontend is part of that follow-up work, not done yet.
+- Live at [dataandgrit.energy/energy-asset-exposure-map](https://dataandgrit.energy/energy-asset-exposure-map) - `processed/latest.json` is fetched directly from S3 client-side (no API Gateway layer), same pattern as the oil price pipeline. The processed bucket allows public `s3:GetObject` scoped to `processed/*` only via a bucket policy (`infra/cloudformation.yaml`'s `ProcessedBucketPolicy`); the raw bucket stays fully private throughout.
 
 ## Repo structure
 
@@ -49,7 +49,7 @@ EnergyAssetExposureMap/
 
 ## Status
 
-Data engineering is built, **deployed, and verified end-to-end in AWS**: stack `energy-asset-exposure-map-dev` in `eu-west-2`. `processed/latest.json` currently holds 395 real energy assets (72 Crown Estate England/Wales/NI leases, 58 Crown Estate Scotland leases, 265 NSTA platforms), each joined against flood/earthquake/storm hazard data. The interactive map frontend, blog post, and publishing (including making the processed bucket public-read) are separate follow-up work.
+Data engineering is built, **deployed, and verified end-to-end in AWS**: stack `energy-asset-exposure-map-dev` in `eu-west-2`. `processed/latest.json` currently holds 395 real energy assets (72 Crown Estate England/Wales/NI leases, 58 Crown Estate Scotland leases, 265 NSTA platforms), each joined against flood/earthquake/storm hazard data. The processed bucket is public-read (scoped to `processed/*`), and the interactive map frontend and write-up are live at [dataandgrit.energy/energy-asset-exposure-map](https://dataandgrit.energy/energy-asset-exposure-map).
 
 Deploying against real AWS - not just local testing - surfaced three problems worth knowing about if this pipeline gets touched again:
 
