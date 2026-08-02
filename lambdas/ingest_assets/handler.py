@@ -1,19 +1,24 @@
 """
 ingest_assets Lambda.
 Triggered by EventBridge on a schedule (monthly - these sources move slowly).
-Pulls energy asset locations from four public sources (Crown Estate x2,
-NSTA, OSM Overpass), normalizes each to a common shape, and writes one
-dated raw snapshot per source to S3 at raw/<source>/YYYY/MM/DD/snapshot.json.
+Pulls energy asset locations from six public sources (Crown Estate x2,
+NSTA, OSM Overpass, DESNZ REPD onshore, hand-curated nuclear stations),
+normalizes each to a common shape, and writes one dated raw snapshot per
+source to S3 at raw/<source>/YYYY/MM/DD/snapshot.json.
 """
 
+import csv
+import io
 import json
 import logging
 import os
+import re
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from pathlib import Path
 
-from shared import s3_helpers, geo
+from shared import s3_helpers, geo, osgb
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -34,6 +39,12 @@ NSTA_PLATFORMS_URL = (
 )
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 OVERPASS_FALLBACK_URL = "https://overpass.kumi.systems/api/interpreter"
+
+# DESNZ Renewable Energy Planning Database quarterly extract. This URL is
+# reissued each quarter (the filename embeds the quarter), so it *will* go
+# stale - there's no stable "latest" alias published, only the dated one on
+# gov.uk/government/publications/renewable-energy-planning-database-monthly-extract.
+REPD_CSV_URL = "https://assets.publishing.service.gov.uk/media/69fc56908cc72d2f863ea58d/REPD_publication_Q1_2026.csv"
 
 # Great Britain mainland + North Sea / UKCS waters, south,west,north,east
 GB_BBOX = (49.8, -8.7, 61.0, 2.0)
@@ -196,11 +207,96 @@ def fetch_osm_power_infrastructure():
     return assets
 
 
+def _slugify_tech(tech):
+    return re.sub(r"[^a-z0-9]+", "_", tech.lower()).strip("_") or "unknown"
+
+
+def fetch_repd_onshore():
+    """
+    Operational onshore renewable generation/storage sites from DESNZ's
+    Renewable Energy Planning Database: solar, onshore wind, battery
+    storage, biomass, hydro, energy-from-waste, landfill gas and more.
+    "Wind Offshore" entries are excluded - Crown Estate already covers
+    offshore wind leases, so REPD's own offshore rows would double-count
+    the same assets under a different id.
+
+    REPD publishes coordinates as OSGB36 National Grid eastings/northings,
+    not lat/lon like every other source here - shared/osgb.py does that
+    conversion (validated against Ordnance Survey's own published Helmert
+    and Transverse Mercator worked examples).
+    """
+    req = urllib.request.Request(REPD_CSV_URL, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        text = resp.read().decode("latin-1")
+
+    assets = []
+    for row in csv.DictReader(io.StringIO(text)):
+        if row.get("Development Status (short)") != "Operational":
+            continue
+        tech = row.get("Technology Type", "")
+        if tech == "Wind Offshore":
+            continue
+        easting, northing = (row.get("X-coordinate") or "").strip(), (row.get("Y-coordinate") or "").strip()
+        if not easting or not northing:
+            continue
+        try:
+            lat, lon = osgb.osgb36_to_wgs84(float(easting), float(northing))
+        except ValueError:
+            continue
+        assets.append(
+            {
+                "id": f"repd_onshore:{row.get('Ref ID')}",
+                "source": "repd_onshore",
+                "type": _slugify_tech(tech),
+                "name": row.get("Site Name") or "Unknown",
+                "lat": lat,
+                "lon": lon,
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "raw_properties": row,
+            }
+        )
+    return assets
+
+
+def _normalize_nuclear_sites(catalogue):
+    assets = []
+    for site in catalogue["sites"]:
+        assets.append(
+            {
+                "id": f"nuclear:{site['name'].lower().replace(' ', '_')}",
+                "source": "nuclear",
+                "type": "nuclear_power_station",
+                "name": site["name"],
+                "lat": site["lat"],
+                "lon": site["lon"],
+                "geometry": {"type": "Point", "coordinates": [site["lon"], site["lat"]]},
+                "raw_properties": {"county": site.get("county"), "reactor_type": site.get("reactor_type")},
+            }
+        )
+    return assets
+
+
+def fetch_nuclear_sites():
+    """
+    Hand-curated catalogue of currently-operating UK nuclear stations - see
+    data/nuclear_sites.json for sourcing/date. Only 5 stations are
+    currently generating, a small and stable enough list that a curated
+    file is more honest than pretending it needs a live feed (same
+    reasoning as the storm catalogue in ingest_hazards).
+    """
+    path = Path(__file__).parent / "data" / "nuclear_sites.json"
+    with open(path, encoding="utf-8") as f:
+        catalogue = json.load(f)
+    return _normalize_nuclear_sites(catalogue)
+
+
 SOURCES = {
     "crown_estate_ewni": fetch_crown_estate_ewni,
     "crown_estate_scotland": fetch_crown_estate_scotland,
     "nsta": fetch_nsta_platforms,
     "osm_overpass": fetch_osm_power_infrastructure,
+    "repd_onshore": fetch_repd_onshore,
+    "nuclear": fetch_nuclear_sites,
 }
 
 

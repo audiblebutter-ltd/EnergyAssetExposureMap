@@ -41,6 +41,17 @@ Every endpoint below was live-tested during research (2026-07-19). All are free,
 - **License**: ODbL — attribution required ("© OpenStreetMap contributors")
 - **Notes**: Confirmed reachable and query syntax valid, but the public instance is frequently slow/busy (hit a 504 "server too busy" during testing) and returns **406** if the `Accept`/`Content-Type` headers aren't set explicitly — must set both. A whole-country `area["ISO3166-1"="GB"]` query is heavy; scope by **bounding box** instead (e.g. GB mainland + North Sea: roughly `49.8,-8.7,61.0,2.0`), and build in a fallback mirror (`overpass.kumi.systems`) plus retry-with-backoff since the public server has no SLA.
 
+### DESNZ — Renewable Energy Planning Database (REPD)
+- **Endpoint**: quarterly CSV/XLSX extract, published at `gov.uk/government/publications/renewable-energy-planning-database-monthly-extract`. Current extract as of 2026-08-02: `https://assets.publishing.service.gov.uk/media/69fc56908cc72d2f863ea58d/REPD_publication_Q1_2026.csv`. **No stable "latest" alias exists** — every quarter gets a new dated URL, so this needs a manual bump each quarter.
+- **Format**: CSV, ~14,300 rows covering every UK renewable electricity project above 150kW tracked through planning/construction/operation/decommissioning. Filter `Development Status (short) == "Operational"` for currently-generating sites (3,100 of the total; 3,050 once `Technology Type == "Wind Offshore"` is excluded to avoid double-counting Crown Estate leases).
+- **License**: OGL v3.0
+- **Notes**: Coordinates are given as `X-coordinate`/`Y-coordinate` — **OSGB36 British National Grid eastings/northings, not lat/lon**, unlike every other source in this pipeline. Converting requires a proper geodetic transform (inverse Transverse Mercator to the Airy 1830/OSGB36 datum, then a 7-parameter Helmert transform to WGS84) — `shared/osgb.py` implements this, validated against Ordnance Survey's own published Transverse Mercator worked example (`docs.os.uk`, "A guide to coordinate systems in Great Britain") and Helmert worked example (round-trip error sub-millimetre on both). 2 of 3,052 operational-onshore rows have blank coordinates and are skipped. Technology types among the operational set: Solar Photovoltaics (1,393), Wind Onshore (778), Landfill Gas (270), Battery (171), Anaerobic Digestion (151), Biomass dedicated/co-firing (83), Small/Large Hydro (97), EfW Incineration (60), Wind Offshore (48, excluded), plus smaller categories (tidal stream, pumped storage, geothermal, hydrogen, flywheels, etc.).
+
+### Nuclear power stations — hand-curated (not a live API)
+- **Source**: EDF's own "nuclear power stations" page (`edfenergy.com/about/nuclear/power-stations`) for which stations are currently generating (checked 2026-08-02); coordinates from each station's Wikipedia infobox (checked same date).
+- **Format**: static `data/nuclear_sites.json` — `{name, county, lat, lon, reactor_type}[]`, committed to the repo, not re-fetched on a schedule.
+- **Rationale**: only 5 UK stations are currently operating (Sizewell B, Heysham 1, Heysham 2, Hartlepool, Torness) — Dungeness B, Hunterston B and Hinkley Point B are decommissioning; Hinkley Point C and Sizewell C aren't generating yet. A list this small and this stable doesn't need a live feed pretending otherwise, matching the same reasoning already applied to the storm catalogue. Will need manual review if a station's status changes (life extension, closure, or a new build coming online).
+
 ## Hazards
 
 ### Environment Agency — flood zones

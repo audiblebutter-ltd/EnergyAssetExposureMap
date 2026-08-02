@@ -1,0 +1,11 @@
+{
+  "_source_note": "Hand-curated, not pulled from a live API - there are only 5 currently-generating UK nuclear stations, a small and stable enough list that a hand-curated dataset is more honest than pretending it needs a feed (same reasoning as storm_events.json). Station list and status confirmed against EDF's own 'nuclear power stations' page (edfenergy.com/about/nuclear/power-stations, checked 2026-08-02) - Dungeness B, Hunterston B and Hinkley Point B are excluded as decommissioning, Hinkley Point C and Sizewell C excluded as under construction/not yet generating. Coordinates are each station's Wikipedia infobox value (checked 2026-08-02); Heysham 1 and Heysham 2 are two separate reactors sharing one site, so they share one coordinate. This list will need a manual review whenever a station's operating status changes (e.g. Heysham 1/2 life-extension dates, or eventual closure) - it will not update itself.",
+  "collected_at": "2026-08-02",
+  "sites": [
+    {"name": "Sizewell B", "county": "Suffolk", "lat": 52.2150, "lon": 1.6197, "reactor_type": "PWR"},
+    {"name": "Heysham 1", "county": "Lancashire", "lat": 54.02889, "lon": -2.91611, "reactor_type": "AGR"},
+    {"name": "Heysham 2", "county": "Lancashire", "lat": 54.02889, "lon": -2.91611, "reactor_type": "AGR"},
+    {"name": "Hartlepool", "county": "County Durham", "lat": 54.63500, "lon": -1.18083, "reactor_type": "AGR"},
+    {"name": "Torness", "county": "East Lothian", "lat": 55.9680, "lon": -2.4091, "reactor_type": "AGR"}
+  ]
+}

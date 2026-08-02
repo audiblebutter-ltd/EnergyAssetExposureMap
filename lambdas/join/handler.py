@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 S3_BUCKET_RAW = os.environ["S3_BUCKET_RAW"]
 S3_BUCKET_PROCESSED = os.environ["S3_BUCKET_PROCESSED"]
 
-ASSET_SOURCES = ["crown_estate_ewni", "crown_estate_scotland", "nsta", "osm_overpass"]
+ASSET_SOURCES = ["crown_estate_ewni", "crown_estate_scotland", "nsta", "osm_overpass", "repd_onshore", "nuclear"]
 HAZARD_SOURCES = ["flood_zones", "earthquakes", "storms"]
 
 # Distance thresholds (km) for a "close" exposure flag, per hazard type.

@@ -40,6 +40,12 @@ deploy_lambda() {
     cp data/storm_events.json "${STAGE_DIR}/data/storm_events.json"
   fi
 
+  # ingest_assets bundles the hand-curated nuclear station catalogue the same way
+  if [ "${LAMBDA_DIR}" = "lambdas/ingest_assets" ]; then
+    mkdir -p "${STAGE_DIR}/data"
+    cp data/nuclear_sites.json "${STAGE_DIR}/data/nuclear_sites.json"
+  fi
+
   # Portable stand-in for `zip -r` - not every dev machine has the zip CLI
   # (this one doesn't), but python3 + zipfile is always available. On
   # git-bash/MSYS, python3 resolves to native Windows Python, which can't

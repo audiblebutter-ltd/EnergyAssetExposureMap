@@ -48,6 +48,7 @@ def main():
         ("crown_estate_ewni", ingest_assets.fetch_crown_estate_ewni),
         ("crown_estate_scotland", ingest_assets.fetch_crown_estate_scotland),
         ("nsta", ingest_assets.fetch_nsta_platforms),
+        ("repd_onshore", ingest_assets.fetch_repd_onshore),
     ]
     if not skip_slow:
         sources.append(("osm_overpass", ingest_assets.fetch_osm_power_infrastructure))
@@ -63,6 +64,16 @@ def main():
 
     if skip_slow:
         print("  osm_overpass: skipped (--skip-slow)")
+
+    # Nuclear is a bundled local file, not a network fetch - handler.py
+    # resolves it relative to the deployed Lambda zip, which doesn't exist
+    # locally, so load it from the repo root and reuse the same normalizer.
+    with open(ROOT / "data" / "nuclear_sites.json", encoding="utf-8") as f:
+        nuclear_catalogue = json.load(f)
+    nuclear_assets = ingest_assets._normalize_nuclear_sites(nuclear_catalogue)
+    print(f"  nuclear: {len(nuclear_assets)} assets")
+    _write("assets_nuclear", nuclear_assets)
+    all_assets.extend(nuclear_assets)
 
     print("Fetching hazards...")
     flood_features = [] if skip_slow else ingest_hazards.fetch_flood_zones()
